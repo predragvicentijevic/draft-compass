@@ -1,0 +1,24 @@
+// A data-only JavaScript literal reader. Never evaluates downloaded code.
+export function readLiteral(text,start){
+ let i=start,nodes=0;
+ const fail=()=>{throw Error('Source data format changed.');};
+ const ws=()=>{while(/\s/.test(text[i]||'')&&i<text.length)i++;};
+ function str(){const quote=text[i++];let out='';while(i<text.length){let c=text[i++];if(c===quote)return out;if(c==='$'&&quote==='`'&&text[i]==='{')fail();if(c==='\\'){c=text[i++];if(c==='u'){const h=text.slice(i,i+4);if(!/^[a-f\d]{4}$/i.test(h))fail();out+=String.fromCharCode(parseInt(h,16));i+=4;}else if(c==='x'){const h=text.slice(i,i+2);if(!/^[a-f\d]{2}$/i.test(h))fail();out+=String.fromCharCode(parseInt(h,16));i+=2;}else out+=({n:'\n',r:'\r',t:'\t',b:'\b',f:'\f',v:'\v','0':'\0','\n':''})[c]??c;}else out+=c;}fail();}
+ function value(depth=0){if(depth>40||++nodes>100000)fail();ws();const c=text[i];if(['"',"'",'`'].includes(c))return str();if(c==='{'||c==='['){const object=c==='{',end=object?'}':']',out=object?Object.create(null):[];i++;ws();while(text[i]!==end){if(object){let key;if(['"',"'",'`'].includes(text[i]))key=str();else{const m=text.slice(i).match(/^[a-zA-Z_$][\w$-]*/);if(!m)fail();key=m[0];i+=key.length;}ws();if(text[i++]!==':')fail();out[key]=value(depth+1);}else out.push(value(depth+1));ws();if(text[i]===end)break;if(text[i++]!==',')fail();ws();}i++;return out;}const m=text.slice(i).match(/^(?:-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|true|false|null)(?![\w$])/);if(!m)fail();i+=m[0].length;return m[0]==='null'?null:m[0]==='true'?true:m[0]==='false'?false:Number(m[0]);}
+ return value();
+}
+function findData(js,signature){const m=signature.exec(js);if(!m)throw Error('Source data format changed.');return readLiteral(js,m.index+m[0].indexOf('=')+1);}
+export function parseResearch(js,html,now=new Date().toISOString()){
+ const counters=findData(js,/[\w$]+=(?=\{abaddon:\{lane:)/);
+ const heroes=findData(js,/[\w$]+=(?=\[\{id:[`"']abaddon[`"'],name:)/);
+ const abilities=findData(js,/[\w$]+=(?=\{["']acid-spray["']:\{name:)/);
+ const fallback=findData(js,/[\w$]+=(?=\{abaddon:\{role:)/);
+ if(!Array.isArray(heroes)||heroes.length<120||heroes.length>300)throw Error('Incomplete source hero roster.');
+ const ids=new Set(heroes.map(h=>h.id)),edges=[],validTiers=new Set(['best','strong','good','mediocre','unrated']);
+ for(const enemy of heroes)for(const phase of ['lane','game'])for(let entry of counters[enemy.id]?.[phase]||[]){if(typeof entry==='string')entry={text:entry};const members=entry.members?.length?entry.members:[...(entry.text||'').matchAll(/^\[\[([a-z0-9-]+)\]\]/g)].map(m=>m[1]);const tags=[...new Set([...(entry.why||'').matchAll(/\[\[([a-z0-9-]+)\]\]/g)].map(m=>abilities[m[1]]?.name).filter(Boolean))];const tier=entry.tier||'unrated';if(!validTiers.has(tier))throw Error('Unknown source counter tier.');for(const counter of members)if(ids.has(counter)&&counter!==enemy.id)edges.push({enemy:enemy.id,counter,phase,tier,abilities:tags.slice(0,6),group:!!entry.members?.length});}
+ const roster=heroes.map(h=>({id:h.id,name:h.name,img:h.img,attr:h.attr,aliases:h.aliases||[],roles:counters[h.id]?.roles||[fallback[h.id]?.role].filter(Boolean)}));
+ if(edges.length<300||roster.some(h=>!h.roles.length||!/^[-a-z0-9]+$/.test(h.id)||typeof h.name!=='string'||!/^\w+$/.test(h.img)||h.roles.some(r=>!['Carry','Mid','Offlane','Support'].includes(r))))throw Error('Source validation failed; retaining the previous data.');
+ return{data:{source:'https://dotacounterpick.com',retrieved:now.slice(0,10),sourceUpdated:html.match(/<time\s+dateTime="(\d{4}-\d{2}-\d{2})"/i)?.[1]||null,patch:html.match(/Current patch<\/dt><dd[^>]*>([^<]+)</)?.[1]||null,heroes:roster,edges},research:JSON.stringify({counters,roster,abilities})};
+}
+export async function hash(text){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));return Array.from(new Uint8Array(bytes),n=>n.toString(16).padStart(2,'0')).join('');}
+export async function fetchResearch(fetcher=fetch){const home=await fetcher('https://dotacounterpick.com/',{signal:AbortSignal.timeout(15000),headers:{Accept:'text/html'},redirect:'manual'});if(!home.ok)throw Error('Counter source unavailable ('+home.status+').');const html=await home.text();const script=[...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/gi)].map(m=>new URL(m[1],'https://dotacounterpick.com/')).find(u=>u.origin==='https://dotacounterpick.com'&&/^\/assets\/index-[\w-]+\.js$/.test(u.pathname));if(!script)throw Error('Source entry script could not be located.');const response=await fetcher(script.href,{signal:AbortSignal.timeout(15000),redirect:'manual'});if(!response.ok)throw Error('Counter research download failed ('+response.status+').');const js=await response.text();if(js.length>4000000)throw Error('Unexpected source size.');const result=parseResearch(js,html);return{...result.data,researchHash:await hash(result.research),sourceAsset:script.pathname};}

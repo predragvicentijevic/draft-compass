@@ -1,0 +1,1 @@
+{"name":"draft-compass-pages","version":"1.0.0","private":true,"engines":{"node":">=24"},"scripts":{"start":"node scripts/serve.mjs","build":"node scripts/build-pages.mjs","update:data":"node scripts/update-data.mjs","test":"node test.cjs && node test-worst-case.cjs && node test-dotafuel.mjs && node test-update.mjs"}}

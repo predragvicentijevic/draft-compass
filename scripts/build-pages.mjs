@@ -1,0 +1,2 @@
+import fs from 'node:fs';
+const root=new URL('../',import.meta.url),from=new URL('public/',root),to=new URL('_site/',root);fs.rmSync(to,{recursive:true,force:true});fs.mkdirSync(to,{recursive:true});for(const name of ['index.html','style.css','app.js','engine.js','data.json','dotafuel.json'])fs.copyFileSync(new URL(name,from),new URL(name,to));fs.writeFileSync(new URL('.nojekyll',to),'');console.log('Static Pages site built in _site/.');
